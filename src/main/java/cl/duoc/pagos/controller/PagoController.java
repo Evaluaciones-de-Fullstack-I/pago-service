@@ -10,6 +10,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.reactive.function.client.WebClient;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/pagos")
@@ -17,6 +21,9 @@ public class PagoController {
 
     @Autowired
     private PagoRepository pagoRepository;
+
+    @Autowired
+    private WebClient.Builder webClientBuilder;
 
     // Procesar un nuevo pago (Llamado por el microservicio de Pedidos)
     @PostMapping("/procesar")
@@ -36,6 +43,29 @@ public class PagoController {
         pago.setEstado(EstadoPago.APROBADO); 
         
         Pago guardado = pagoRepository.save(pago);
+
+        // 🧾 [CONEXIÓN AUTOMÁTICA] PASO 6: AVISAR AL MS VENTAS (Puerto 8085)
+        try {
+            // Armamos el mapa con los datos exactos que pide tu VentaRequestDTO
+            Map<String, Object> ventaRequest = new HashMap<>();
+            ventaRequest.put("pedidoId", guardado.getPedidoId());
+            ventaRequest.put("vendedorId", 1); // Enviamos un ID por defecto para la validación
+            ventaRequest.put("montoTotal", guardado.getMonto()); // Cambiado a montoTotal para hacer match
+
+            // Enviamos la petición POST a la ruta exacta /api/ventas/registrar
+            webClientBuilder.build().post()
+                    .uri("http://localhost:8085/api/ventas/registrar") 
+                    .bodyValue(ventaRequest)
+                    .retrieve()
+                    .bodyToMono(Void.class)
+                    .block(); 
+
+            System.out.println("🧾 [CONEXIÓN] Pago ID " + guardado.getId() + " notificado exitosamente a MS Ventas.");
+            
+        } catch (Exception e) {
+            System.out.println("❌ [ERROR] No se pudo notificar al MS Ventas: " + e.getMessage());
+        }
+
         return new ResponseEntity<>(convertirADto(guardado), HttpStatus.CREATED);
     }
 
