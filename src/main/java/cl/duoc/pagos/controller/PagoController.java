@@ -82,8 +82,9 @@ public class PagoController {
             ventaRequest.put("vendedorId", 1); 
             ventaRequest.put("montoTotal", guardado.getMonto());
 
+            // 🛰️ Usamos el nombre del servicio en lugar de localhost:8085
             webClientBuilder.build().post()
-                    .uri("http://localhost:8085/api/ventas/registrar") 
+                    .uri("http://ventas-service/api/ventas/registrar") // 👈 Cambiado a ventas-service
                     .bodyValue(ventaRequest)
                     .retrieve()
                     .bodyToMono(Void.class)
