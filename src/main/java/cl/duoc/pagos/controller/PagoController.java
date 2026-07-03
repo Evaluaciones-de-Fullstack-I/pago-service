@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value; // 👈 Agregado para leer la URL fija
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -33,10 +34,14 @@ public class PagoController {
     @Autowired
     private WebClient.Builder webClientBuilder;
 
+    // 🛰️ URL del microservicio de Ventas (Configurable desde properties o Railway)
+    @Value("${url.ventas:http://localhost:8085}")
+    private String urlVentas;
+
     @PostMapping("/procesar")
     @Operation(
         summary = "Procesar un nuevo pago",
-        description = "Registra una transacción financiera asociada a un pedido. Si es aprobada, notifica automáticamente al MS Ventas (puerto 8085) vía WebClient.",
+        description = "Registra una transacción financiera asociada a un pedido. Si es aprobada, notifica automáticamente al MS Ventas vía WebClient.",
         responses = {
             @ApiResponse(
                 responseCode = "201", 
@@ -82,9 +87,9 @@ public class PagoController {
             ventaRequest.put("vendedorId", 1); 
             ventaRequest.put("montoTotal", guardado.getMonto());
 
-            // 🛰️ Usamos el nombre del servicio en lugar de localhost:8085
+            // 🛰️ Llamada directa usando la variable urlVentas
             webClientBuilder.build().post()
-                    .uri("http://ventas-service/api/ventas/registrar") // 👈 Cambiado a ventas-service
+                    .uri(urlVentas + "/api/ventas/registrar")
                     .bodyValue(ventaRequest)
                     .retrieve()
                     .bodyToMono(Void.class)
