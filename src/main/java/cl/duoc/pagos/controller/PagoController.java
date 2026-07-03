@@ -5,6 +5,13 @@ import cl.duoc.pagos.dto.PagoResponseDTO;
 import cl.duoc.pagos.model.EstadoPago;
 import cl.duoc.pagos.model.Pago;
 import cl.duoc.pagos.repository.PagoRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -17,6 +24,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/pagos")
+@Tag(name = "Pagos", description = "Controlador para el procesamiento de transacciones financieras, reembolsos y sincronización con el MS Ventas")
 public class PagoController {
 
     @Autowired
@@ -25,13 +33,38 @@ public class PagoController {
     @Autowired
     private WebClient.Builder webClientBuilder;
 
-    // Procesar un nuevo pago (Llamado por el microservicio de Pedidos)
     @PostMapping("/procesar")
-    public ResponseEntity<PagoResponseDTO> procesarPago(@Valid @RequestBody PagoRequestDTO dto) {
+    @Operation(
+        summary = "Procesar un nuevo pago",
+        description = "Registra una transacción financiera asociada a un pedido. Si es aprobada, notifica automáticamente al MS Ventas (puerto 8085) vía WebClient.",
+        responses = {
+            @ApiResponse(
+                responseCode = "201", 
+                description = "Pago procesado y aprobado con éxito"
+            ),
+            @ApiResponse(
+                responseCode = "400", 
+                description = "El pedido indicado ya cuenta con un pago registrado o los datos de entrada son incorrectos"
+            )
+        }
+    )
+    public ResponseEntity<PagoResponseDTO> procesarPago(
+            @Valid @RequestBody(
+                description = "Estructura JSON con la información requerida para procesar el pago",
+                required = true,
+                content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = PagoRequestDTO.class),
+                    examples = @ExampleObject(
+                        name = "Ejemplo de Pago",
+                        value = "{\n  \"pedidoId\": 10024,\n  \"monto\": 49990,\n  \"metodo\": \"TARJETA_CREDITO\"\n}"
+                    )
+                )
+            )
+            @org.springframework.web.bind.annotation.RequestBody PagoRequestDTO dto) {
         
-        // Verificamos si ya existe un pago para este pedido
         if (pagoRepository.findByPedidoId(dto.getPedidoId()).isPresent()) {
-            return ResponseEntity.badRequest().build(); // Ya se pagó este pedido
+            return ResponseEntity.badRequest().build();
         }
 
         Pago pago = new Pago();
@@ -39,20 +72,16 @@ public class PagoController {
         pago.setMonto(dto.getMonto());
         pago.setMetodo(dto.getMetodo());
         
-        // Simulamos que la pasarela siempre lo aprueba
         pago.setEstado(EstadoPago.APROBADO); 
         
         Pago guardado = pagoRepository.save(pago);
 
-        // 🧾 [CONEXIÓN AUTOMÁTICA] PASO 6: AVISAR AL MS VENTAS (Puerto 8085)
         try {
-            // Armamos el mapa con los datos exactos que pide tu VentaRequestDTO
             Map<String, Object> ventaRequest = new HashMap<>();
             ventaRequest.put("pedidoId", guardado.getPedidoId());
-            ventaRequest.put("vendedorId", 1); // Enviamos un ID por defecto para la validación
-            ventaRequest.put("montoTotal", guardado.getMonto()); // Cambiado a montoTotal para hacer match
+            ventaRequest.put("vendedorId", 1); 
+            ventaRequest.put("montoTotal", guardado.getMonto());
 
-            // Enviamos la petición POST a la ruta exacta /api/ventas/registrar
             webClientBuilder.build().post()
                     .uri("http://localhost:8085/api/ventas/registrar") 
                     .bodyValue(ventaRequest)
@@ -69,16 +98,42 @@ public class PagoController {
         return new ResponseEntity<>(convertirADto(guardado), HttpStatus.CREATED);
     }
 
-    // Consultar el estado de un pago por el ID del Pedido
     @GetMapping("/pedido/{pedidoId}")
+    @Operation(
+        summary = "Consultar pago por ID de Pedido",
+        description = "Busca y recupera los detalles del flujo de pago en base al identificador único del pedido.",
+        responses = {
+            @ApiResponse(
+                responseCode = "200", 
+                description = "Pago localizado correctamente"
+            ),
+            @ApiResponse(
+                responseCode = "404", 
+                description = "No se encontró ningún registro de pago para el ID de pedido suministrado"
+            )
+        }
+    )
     public ResponseEntity<PagoResponseDTO> obtenerPagoPorPedido(@PathVariable Long pedidoId) {
         Pago pago = pagoRepository.findByPedidoId(pedidoId)
                 .orElseThrow(() -> new RuntimeException("Pago no encontrado para el pedido: " + pedidoId));
         return ResponseEntity.ok(convertirADto(pago));
     }
 
-    // Procesar reembolso (ESTE ES EL QUE LLAMARÁ EL MICROSERVICIO DE RECLAMOS)
     @PutMapping("/reembolsar/pedido/{pedidoId}")
+    @Operation(
+        summary = "Procesar el reembolso de un pago",
+        description = "Cambia el estado de una transacción existente a REEMBOLSADO (endpoint diseñado para ser invocado por el MS de Reclamos).",
+        responses = {
+            @ApiResponse(
+                responseCode = "200", 
+                description = "Reembolso efectuado y guardado correctamente"
+            ),
+            @ApiResponse(
+                responseCode = "404", 
+                description = "No se ubicó un pago para el pedido entregado"
+            )
+        }
+    )
     public ResponseEntity<PagoResponseDTO> reembolsarPago(@PathVariable Long pedidoId) {
         Pago pago = pagoRepository.findByPedidoId(pedidoId)
                 .orElseThrow(() -> new RuntimeException("Pago no encontrado para el pedido: " + pedidoId));
@@ -93,7 +148,6 @@ public class PagoController {
         return ResponseEntity.ok(convertirADto(actualizado));
     }
 
-    // Método auxiliar
     private PagoResponseDTO convertirADto(Pago pago) {
         PagoResponseDTO dto = new PagoResponseDTO();
         dto.setId(pago.getId());
